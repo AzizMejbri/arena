@@ -187,8 +187,6 @@ This:
 - builds libarena.a and copies it to /usr/local/lib/
 - copies arena.h to /usr/local/include/
 
-```bash
-```
 
 To use afterwards include headers:
 
