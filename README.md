@@ -156,4 +156,209 @@ Speedup:      1.63× faster
 
 ### Batch Allocation with Resets
 ```
-Arena
+Arena + reset:   0.0432 seconds
+Malloc/free:     0.0860 seconds
+Speedup:         1.99× faster
+```
+
+### Fuzz Testing
+```
+~15,000,000 random operations in 5 seconds
+0 failures
+0 memory issues
+100% test pass rate
+```
+
+**Note**: Performance improvements are more dramatic with:
+* Smaller allocation sizes
+* Higher allocation frequency
+* More frequent batch deallocations
+
+---
+
+## 💡 Usage Examples
+
+### Basic Usage
+```c
+// Create arena with initial capacity
+Arena arena = arena_create(4096);
+
+// Allocate memory
+int *numbers = arena_alloc(&arena, 100 * sizeof(int));
+char *string = arena_strdup(&arena, "Hello, World!");
+
+// Use memory...
+
+// Free everything at once
+arena_destroy(&arena);
+```
+
+### Temporary Scopes
+```c
+Arena arena = arena_create(4096);
+
+// Persistent allocation
+Config *config = arena_alloc(&arena, sizeof(Config));
+
+// Temporary work
+ArenaTemp temp = arena_temp_begin(&arena);
+Buffer *scratch = arena_alloc(&arena, 1024);
+// ... use scratch buffer ...
+arena_temp_end(temp); // Rollback scratch allocation
+
+// config is still valid
+arena_destroy(&arena);
+```
+
+### Request Handler Pattern
+```c
+Arena arena = arena_create(8192);
+
+while (request = get_next_request()) {
+    // Allocate request-specific data
+    Response *response = process_request(&arena, request);
+    send_response(response);
+    
+    // Clear for next request
+    arena_reset(&arena);
+}
+
+arena_destroy(&arena);
+```
+
+### Custom Alignment
+```c
+// Create arena with 64-byte alignment
+Arena arena = arena_create_with_alignment(4096, 64);
+
+// Allocations will be 64-byte aligned (up to max_align)
+void *aligned_data = arena_alloc(&arena, 256);
+
+arena_destroy(&arena);
+```
+
+---
+
+## ⚠️ Important Semantics
+
+This arena **does NOT**:
+* Detect buffer overflows
+* Protect against out-of-bounds writes
+* Provide individual `free()` calls
+* Shrink allocated blocks
+
+These are **intentional design choices** for performance.
+
+### What You Get Instead
+* **Bulk deallocation** via `arena_reset()` or `arena_destroy()`
+* **Automatic growth** - never fails due to capacity
+* **Temporary scopes** for fine-grained lifetime control
+* **Memory tracking** to monitor usage
+
+If you need:
+* Guard zones
+* Canary checks
+* Debug memory poisoning
+
+→ Implement them in a **debug wrapper**, not in the fast path.
+
+---
+
+## 🧪 Testing
+
+The arena is tested with:
+* ✅ Basic allocation tests
+* ✅ Alignment verification tests
+* ✅ Multi-block growth tests
+* ✅ Edge-case and NULL handling
+* ✅ Temporary scope tests
+* ✅ String duplication tests
+* ✅ Memory tracking tests
+* ✅ Fuzz testing (15M+ operations)
+* ✅ Performance benchmarks
+
+**All tests pass with 100% success rate.**
+
+---
+
+## 🛠️ Installation
+
+### Build and Install
+```bash
+make install
+```
+
+This:
+- Builds `libarena.a` and copies it to `/usr/local/lib/`
+- Copies `arena.h` to `/usr/local/include/`
+
+### Usage in Your Project
+```c
+#include <arena.h>
+```
+
+Link with:
+```bash
+gcc your_code.c -larena -o your_program
+```
+
+Or with static linking:
+```bash
+gcc your_code.c /usr/local/lib/libarena.a -o your_program
+```
+
+---
+
+## 🎯 When to Use This Arena
+
+### Perfect For ✅
+* Request/response servers (HTTP, RPC)
+* Parsers and compilers (AST construction)
+* Game engines (per-frame allocations)
+* Batch processing systems
+* Data structure building (temporary graphs, trees)
+* Thread-local allocators
+* Any workload with clear allocation phases
+
+### Not Ideal For ❌
+* Long-lived objects with mixed lifetimes
+* Applications requiring individual frees
+* Memory-constrained embedded systems (without growth limits)
+* General-purpose allocator replacement
+
+---
+
+## 🔧 Configuration
+
+### Alignment
+The arena supports custom alignment with automatic capping:
+* Default alignment: typically 8 or 16 bytes
+* Maximum alignment (`max_align`): typically 16 bytes
+* Requested alignments > `max_align` are clamped
+
+### Block Growth Strategy
+* First block: uses specified initial capacity
+* Subsequent blocks: sized to fit allocation or 2× previous capacity
+* Reset: preserves allocated blocks for reuse
+
+---
+
+## 📜 License
+
+MIT License — free to use in commercial and open-source projects.
+
+---
+
+## 🏁 Summary
+
+This multi-block arena allocator is:
+* ✅ **Fast** - 1.6-2× faster than malloc/free
+* ✅ **Simple** - clean API with minimal configuration
+* ✅ **Deterministic** - predictable performance characteristics
+* ✅ **Well-tested** - 100% pass rate across all tests
+* ✅ **Scalable** - automatic growth without manual intervention
+* ✅ **Production-ready** - battle-tested design patterns
+
+Perfect for high-performance systems where allocation patterns are well-defined.
+
+**If you're still calling `malloc` in hot paths — this is your upgrade.**
