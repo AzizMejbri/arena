@@ -40,7 +40,8 @@ void test_buffer_overflow() {
   printf("Testing buffer overflow protection: (not applicable for arena) ");
 
   Arena arena = arena_create(1024);
-  test(arena.buffer != NULL);
+  test(arena.head != NULL);
+  test(arena.head->buffer != NULL);
 
   uint8_t *a = arena_alloc(&arena, 10);
   uint8_t *b = arena_alloc(&arena, 10);
@@ -143,8 +144,64 @@ void test_null_and_edge_cases() {
   // Test very large alignment (should be capped to max_align)
   void *ptr = arena_alloc_aligned(&arena, 10, 1024);
   test(ptr != NULL);
-  // Should be aligned to max_align (16) not 1024
+  // Should be aligned to max_align not 1024
   test((uintptr_t)ptr % arena.max_align == 0);
+
+  arena_destroy(&arena);
+}
+
+// ================== MULTI-BLOCK TESTS ==================
+
+void test_multi_block_allocation() {
+  printf("Testing multi-block allocation: ");
+
+  // Create small arena to force multiple blocks
+  Arena arena = arena_create(256);
+  test(arena.head != NULL);
+  test(arena.head->capacity == 256);
+
+  // Allocate more than initial capacity
+  void *a = arena_alloc(&arena, 100);
+  test(a != NULL);
+
+  void *b = arena_alloc(&arena, 100);
+  test(b != NULL);
+
+  void *c = arena_alloc(&arena, 100);
+  test(c != NULL);
+
+  // Should have created at least one additional block
+  uint64_t total_used = arena_used(&arena);
+  test(total_used >= 300);
+
+  // Allocate very large block
+  void *large = arena_alloc(&arena, 1024);
+  test(large != NULL);
+
+  arena_destroy(&arena);
+}
+
+void test_multi_block_reset() {
+  printf("Testing multi-block reset: ");
+
+  Arena arena = arena_create(128);
+
+  // Force multiple blocks
+  for (int i = 0; i < 10; i++) {
+    void *ptr = arena_alloc(&arena, 64);
+    test(ptr != NULL);
+  }
+
+  uint64_t used_before = arena_used(&arena);
+  test(used_before > 128); // Should have multiple blocks
+
+  // Reset should zero usage in all blocks
+  arena_reset(&arena);
+  test(arena_used(&arena) == 0);
+
+  // Should be able to allocate again
+  void *ptr = arena_alloc(&arena, 64);
+  test(ptr != NULL);
 
   arena_destroy(&arena);
 }
@@ -159,7 +216,7 @@ void benchmark_arena_vs_malloc() {
 
   // Arena benchmark
   clock_t start = clock();
-  Arena arena = arena_create(iterations * max_size);
+  Arena arena = arena_create(iterations * max_size / 10); // Let it grow
 
   for (size_t i = 0; i < iterations; i++) {
     size_t size = (i % max_size) + 1;
@@ -198,7 +255,7 @@ void benchmark_arena_vs_malloc() {
 
   // Test with frequent resets (simulating batch deallocation)
   start = clock();
-  Arena arena2 = arena_create(max_size * 1000); // Smaller arena
+  Arena arena2 = arena_create(max_size * 100);
 
   for (size_t batch = 0; batch < 100; batch++) {
     for (size_t i = 0; i < 10000; i++) {
@@ -246,7 +303,7 @@ void fuzz_test_arena() {
   printf("\n=== FUZZING TEST (random operations) ===\n");
   printf("Running for 5 seconds...\n");
 
-  Arena arena = arena_create(10 * 1024 * 1024); // 10MB arena
+  Arena arena = arena_create(1024 * 1024); // 1MB initial
   time_t start_time = time(NULL);
   int operations = 0;
 
@@ -305,7 +362,7 @@ void fuzz_test_arena() {
         }
         test_str[len] = '\0';
 
-        uint8_t *dup = arena_strdup(&arena, test_str);
+        char *dup = arena_strdup(&arena, test_str);
         if (dup) {
           assert(strcmp(test_str, dup) == 0);
         }
@@ -321,7 +378,7 @@ void fuzz_test_arena() {
     case 8: // Temporary scope
       if (arena_remaining(&arena) > 1000) {
         ArenaTemp temp = arena_temp_begin(&arena);
-        size_t before = arena_used(&arena);
+        uint64_t before = arena_used(&arena);
 
         // Do some temp allocations
         for (int i = 0; i < 10; i++) {
@@ -351,28 +408,29 @@ void fuzz_test_arena() {
     operations++;
 
     // Verify arena invariants
-    assert(arena.used <= arena.capacity);
-    assert(arena.buffer != NULL || arena.capacity == 0);
+    assert(arena.head != NULL);
+    assert(arena.head->used <= arena.head->capacity);
   }
 
   printf("Completed %d operations without issues\n", operations);
   arena_destroy(&arena);
 }
 
-// ================== EXISTING TESTS (keep these) ==================
+// ================== EXISTING TESTS (updated) ==================
 
 void test_basic_allocation() {
   printf("Testing basic allocation: ");
 
   Arena arena = arena_create(1024);
-  test(arena.buffer != NULL);
-  test(arena.capacity == 1024);
-  test(arena.used == 0);
+  test(arena.head != NULL);
+  test(arena.head->buffer != NULL);
+  test(arena.head->capacity == 1024);
+  test(arena.head->used == 0);
 
   // Allocate some memory
   int *nums = (int *)arena_alloc(&arena, 10 * sizeof(int));
   test(nums != NULL);
-  test(arena.used == 10 * sizeof(int));
+  test(arena_used(&arena) == 10 * sizeof(int));
 
   // Use the memory
   for (int i = 0; i < 10; i++) {
@@ -404,6 +462,22 @@ void test_aligned_allocation() {
     effective_align = arena.max_align;
 
   test((uintptr_t)aligned % effective_align == 0);
+
+  arena_destroy(&arena);
+}
+
+void test_custom_alignment() {
+  printf("Testing custom alignment creation: ");
+
+  Arena arena = arena_create_with_alignment(1024, 64);
+  test(arena.head != NULL);
+  test(arena.alignment == 64);
+
+  void *ptr = arena_alloc(&arena, 10);
+  test(ptr != NULL);
+  // Check alignment against the effective alignment (min of requested and max_align)
+  uint64_t effective_align = arena.alignment < arena.max_align ? arena.alignment : arena.max_align;
+  test((uintptr_t)ptr % effective_align == 0);
 
   arena_destroy(&arena);
 }
@@ -473,11 +547,26 @@ void test_strdup() {
 
   Arena arena = arena_create(1024);
 
-  const uint8_t *original = "Hello, Arena!";
-  uint8_t *duplicate = arena_strdup(&arena, original);
+  const char *original = "Hello, Arena!";
+  char *duplicate = arena_strdup(&arena, original);
   test(duplicate != NULL);
   test(strcmp(original, duplicate) == 0);
   test(duplicate != original); // Should be a copy
+
+  arena_destroy(&arena);
+}
+
+void test_strndup() {
+  printf("Testing strndup: ");
+
+  Arena arena = arena_create(1024);
+
+  const char *original = "Hello, Arena!";
+  char *duplicate = arena_strndup(&arena, original, 5);
+  test(duplicate != NULL);
+  test(strncmp(original, duplicate, 5) == 0);
+  test(strlen(duplicate) == 5);
+  test(strcmp(duplicate, "Hello") == 0);
 
   arena_destroy(&arena);
 }
@@ -490,16 +579,16 @@ void test_reset() {
   // Allocate some memory
   int *a = (int *)arena_alloc(&arena, 100);
   test(a != NULL);
-  test(arena.used == 100);
+  test(arena_used(&arena) == 100);
 
   // Reset the arena
   arena_reset(&arena);
-  test(arena.used == 0);
+  test(arena_used(&arena) == 0);
 
   // Should be able to allocate again
   int *b = (int *)arena_alloc(&arena, 200);
   test(b != NULL);
-  test(arena.used == 200);
+  test(arena_used(&arena) == 200);
 
   arena_destroy(&arena);
 }
@@ -512,7 +601,7 @@ void test_temp_scope() {
   // Allocate some memory
   int *a = (int *)arena_alloc(&arena, 100);
   test(a != NULL);
-  size_t used_before = arena.used;
+  uint64_t used_before = arena_used(&arena);
 
   // Begin temporary scope
   ArenaTemp temp = arena_temp_begin(&arena);
@@ -520,11 +609,11 @@ void test_temp_scope() {
   // Allocate in temp scope
   int *b = (int *)arena_alloc(&arena, 200);
   test(b != NULL);
-  test(arena.used > used_before);
+  test(arena_used(&arena) > used_before);
 
   // End temp scope (should roll back)
   arena_temp_end(temp);
-  test(arena.used == used_before);
+  test(arena_used(&arena) == used_before);
 
   // Should still be able to allocate
   int *c = (int *)arena_alloc(&arena, 50);
@@ -534,7 +623,7 @@ void test_temp_scope() {
 }
 
 void test_out_of_memory() {
-  printf("Testing out of memory: ");
+  printf("Testing large allocation: ");
 
   Arena arena = arena_create(100);
 
@@ -542,39 +631,39 @@ void test_out_of_memory() {
   void *a = arena_alloc(&arena, 50);
   test(a != NULL);
 
-  // Should also succeed
+  // Should succeed (will allocate new block)
   void *b = arena_alloc(&arena, 30);
   test(b != NULL);
 
-  // Should fail (out of memory)
+  // Should succeed (will allocate new block)
   void *c = arena_alloc(&arena, 30);
-  test(c == NULL);
+  test(c != NULL);
 
   arena_destroy(&arena);
 }
 
-void test_arena_init() {
-  printf("Testing arena initialization: ");
+void test_memory_usage_tracking() {
+  printf("Testing memory usage tracking: ");
 
-  // Use stack memory for arena
-  uint8_t buffer[256];
-  Arena arena;
+  Arena arena = arena_create(1024);
 
-  test(arena_init(&arena, buffer, sizeof(buffer)));
-  test(arena.buffer == buffer);
-  test(arena.capacity == sizeof(buffer));
-  test(arena.used == 0);
+  test(arena_used(&arena) == 0);
 
-  // Allocate from stack-based arena
-  int *nums = (int *)arena_alloc(&arena, 4 * sizeof(int));
-  test(nums != NULL);
+  void *a = arena_alloc(&arena, 100);
+  test(a != NULL);
+  uint64_t used_after_a = arena_used(&arena);
+  test(used_after_a >= 100); // May be more due to alignment
 
-  for (int i = 0; i < 4; i++) {
-    nums[i] = i * 10;
-    test(nums[i] == i * 10);
-  }
+  void *b = arena_alloc(&arena, 200);
+  test(b != NULL);
+  uint64_t used_after_b = arena_used(&arena);
+  test(used_after_b >= used_after_a + 200); // Total should be at least sum
 
-  // No need to destroy (stack memory)
+  // Remaining should be positive in current block
+  uint64_t remaining = arena_remaining(&arena);
+  test(remaining >= 0); // Always true for uint64_t, but documents expectation
+
+  arena_destroy(&arena);
 }
 
 int main() {
@@ -590,6 +679,9 @@ int main() {
   test_aligned_allocation();
   printf("\n");
 
+  test_custom_alignment();
+  printf("\n");
+
   test_zeroed_allocation();
   printf("\n");
 
@@ -602,6 +694,9 @@ int main() {
   test_strdup();
   printf("\n");
 
+  test_strndup();
+  printf("\n");
+
   test_reset();
   printf("\n");
 
@@ -611,7 +706,14 @@ int main() {
   test_out_of_memory();
   printf("\n");
 
-  test_arena_init();
+  test_memory_usage_tracking();
+  printf("\n");
+
+  // Run multi-block tests
+  test_multi_block_allocation();
+  printf("\n");
+
+  test_multi_block_reset();
   printf("\n");
 
   // Run memory corruption tests
