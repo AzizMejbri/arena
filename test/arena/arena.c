@@ -1,11 +1,11 @@
 #include "../../components/arena.h"
 #include "../test.h"
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <stdint.h>
 
 // Memory corruption detection helper
 #define PATTERN_BYTE 0xAA
@@ -475,8 +475,10 @@ void test_custom_alignment() {
 
   void *ptr = arena_alloc(&arena, 10);
   test(ptr != NULL);
-  // Check alignment against the effective alignment (min of requested and max_align)
-  uint64_t effective_align = arena.alignment < arena.max_align ? arena.alignment : arena.max_align;
+  // Check alignment against the effective alignment (min of requested and
+  // max_align)
+  uint64_t effective_align =
+      arena.alignment < arena.max_align ? arena.alignment : arena.max_align;
   test((uintptr_t)ptr % effective_align == 0);
 
   arena_destroy(&arena);

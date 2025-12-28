@@ -1,8 +1,8 @@
 #ifndef TEST_H
 #define TEST_H
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define SUCCESS "\033[36m"
 #define ALMOSTSUCCESS "\033[32m"
@@ -29,9 +29,10 @@ static unsigned failures = 0;
 
 #define summary()                                                              \
   do {                                                                         \
-    char* col = SUCCESS;                                                       \
+    char *col = SUCCESS;                                                       \
     double ratio = (double)successes / (double)test_num;                       \
-    if ( ratio == 1 ) col = SUCCESS;                                           \
+    if (ratio == 1)                                                            \
+      col = SUCCESS;                                                           \
     else if (.9 <= ratio && ratio < 1)                                         \
       col = ALMOSTSUCCESS;                                                     \
     else if (.7 <= ratio && ratio < .9)                                        \
